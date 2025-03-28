@@ -39,11 +39,25 @@ export const Battle: React.FC<BattleProps> = ({
     winner: null,
   });
 
-  const bgColor = useColorModeValue('white', 'gray.800');
-  const borderColor = useColorModeValue('gray.200', 'gray.600');
-
   const playerMaxHp = playerPokemon.stats.hp;
   const opponentMaxHp = opponentPokemon.stats.hp;
+
+  // Effect to handle CPU turns
+  useEffect(() => {
+    if (gameMode === 'pve' && battleState.currentTurn === 'opponent' && !battleState.isGameOver) {
+      const timer = setTimeout(() => {
+        const opponent = battleState.opponentPokemon;
+        if (opponent) {
+          const opponentMove = opponent.moves[
+            Math.floor(Math.random() * opponent.moves.length)
+          ];
+          handleAttack(opponent.moves.indexOf(opponentMove), 'opponent');
+        }
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [battleState.currentTurn, gameMode, battleState.isGameOver]);
 
   const addToBattleLog = (message: string) => {
     setBattleState((prev) => ({
@@ -52,146 +66,88 @@ export const Battle: React.FC<BattleProps> = ({
     }));
   };
 
-  const handleAttack = async (moveIndex: number) => {
-    if (battleState.isGameOver || !battleState.playerPokemon || !battleState.opponentPokemon) return;
+  const handleAttack = async (moveIndex: number, attacker: 'player' | 'opponent') => {
+    if (battleState.isGameOver) return;
 
-    const playerPokemon = battleState.playerPokemon;
-    const opponentPokemon = battleState.opponentPokemon;
-    const move = playerPokemon.moves[moveIndex];
+    const isPlayerTurn = attacker === 'player';
+    const currentPokemon = isPlayerTurn ? battleState.playerPokemon : battleState.opponentPokemon;
+    const targetPokemon = isPlayerTurn ? battleState.opponentPokemon : battleState.playerPokemon;
+
+    if (!currentPokemon || !targetPokemon) return;
+
+    const move = currentPokemon.moves[moveIndex];
     const damage = pokemonService.calculateDamage(
-      playerPokemon,
-      opponentPokemon,
+      currentPokemon,
+      targetPokemon,
       move
     );
 
-    // Player's turn
     setBattleState((prev) => {
-      if (!prev.opponentPokemon) return prev;
+      const targetKey = isPlayerTurn ? 'opponentPokemon' : 'playerPokemon';
+      const target = prev[targetKey];
+      
+      if (!target) return prev;
+
+      const newHp = Math.max(0, target.stats.hp - damage);
+      const isDefeated = newHp <= 0;
+
       return {
         ...prev,
-        opponentPokemon: {
-          ...prev.opponentPokemon,
+        [targetKey]: {
+          ...target,
           stats: {
-            ...prev.opponentPokemon.stats,
-            hp: Math.max(0, prev.opponentPokemon.stats.hp - damage),
+            ...target.stats,
+            hp: newHp,
           },
         },
         battleLog: [
           ...prev.battleLog,
-          `${playerPokemon.name} used ${move.name}!`,
-          `It dealt ${damage} damage to ${opponentPokemon.name}!`,
+          `${currentPokemon.name} used ${move.name}!`,
+          `It dealt ${damage} damage to ${targetPokemon.name}!`,
         ],
+        currentTurn: isPlayerTurn ? 'opponent' : 'player',
+        isGameOver: isDefeated,
+        winner: isDefeated ? (isPlayerTurn ? 'player' : 'opponent') : null,
       };
     });
 
-    // Check if opponent is defeated
-    if (opponentPokemon.stats.hp - damage <= 0) {
-      setBattleState((prev) => ({
-        ...prev,
-        isGameOver: true,
-        winner: 'player',
-      }));
-      onBattleEnd('player');
-      return;
+    // Check if target is defeated
+    if (targetPokemon.stats.hp - damage <= 0) {
+      onBattleEnd(isPlayerTurn ? 'player' : 'opponent');
     }
-
-    // Opponent's turn
-    setTimeout(() => {
-      if (gameMode === 'pve' && battleState.opponentPokemon && battleState.playerPokemon) {
-        const opponentMove = battleState.opponentPokemon.moves[
-          Math.floor(Math.random() * battleState.opponentPokemon.moves.length)
-        ];
-        const opponentDamage = pokemonService.calculateDamage(
-          battleState.opponentPokemon,
-          battleState.playerPokemon,
-          opponentMove
-        );
-
-        setBattleState((prev) => {
-          if (!prev.playerPokemon || !prev.opponentPokemon) return prev;
-          const newHp = Math.max(0, prev.playerPokemon.stats.hp - opponentDamage);
-          const battleLogMessage = `${prev.opponentPokemon.name} used ${opponentMove.name}!`;
-          const damageMessage = `It dealt ${opponentDamage} damage to ${prev.playerPokemon.name}!`;
-          
-          return {
-            ...prev,
-            playerPokemon: {
-              ...prev.playerPokemon,
-              stats: {
-                ...prev.playerPokemon.stats,
-                hp: newHp,
-              },
-            },
-            battleLog: [
-              ...prev.battleLog,
-              battleLogMessage,
-              damageMessage,
-            ],
-            isGameOver: newHp <= 0,
-            winner: newHp <= 0 ? 'opponent' : null,
-          };
-        });
-
-        // Check if player is defeated
-        if (battleState.playerPokemon.stats.hp - opponentDamage <= 0) {
-          onBattleEnd('opponent');
-        }
-      }
-    }, 1000);
   };
 
   const renderBattleLog = () => (
-    <Card bg={bgColor} borderWidth="1px" borderColor={borderColor} height="200px">
-      <CardBody>
-        <VStack 
-          align="start" 
-          spacing={2} 
-          height="100%" 
-          overflowY="auto"
-          css={{
-            '&::-webkit-scrollbar': {
-              width: '4px',
-            },
-            '&::-webkit-scrollbar-track': {
-              width: '6px',
-              background: 'transparent',
-            },
-            '&::-webkit-scrollbar-thumb': {
-              background: '#CBD5E0',
-              borderRadius: '24px',
-            },
-            '&::-webkit-scrollbar-thumb:hover': {
-              background: '#A0AEC0',
-            },
-          }}
+    <Box className="battle-log">
+      {[...battleState.battleLog].reverse().map((message, index) => (
+        <Text 
+          key={index} 
+          className={`battle-message ${message.includes('damage') ? 'damage' : message.includes('used') ? 'attack' : ''}`}
         >
-          {[...battleState.battleLog].reverse().map((message, index) => (
-            <Text 
-              key={index} 
-              fontSize="sm"
-              color={message.includes('damage') ? 'red.500' : 'inherit'}
-              fontWeight={message.includes('used') ? 'bold' : 'normal'}
-            >
-              {message}
-            </Text>
-          ))}
-        </VStack>
-      </CardBody>
-    </Card>
+          {message}
+        </Text>
+      ))}
+    </Box>
   );
 
-  const renderMoves = () => {
-    if (!battleState.playerPokemon) return null;
+  const renderMoves = (pokemon: Pokemon, isPlayer: boolean) => {
+    if (!pokemon) return null;
+    const isCurrentTurn = (isPlayer && battleState.currentTurn === 'player') || 
+                         (!isPlayer && battleState.currentTurn === 'opponent');
+
+    // Don't render moves for CPU in PvE mode
+    if (!isPlayer && gameMode === 'pve') return null;
+
     return (
-      <Grid templateColumns="repeat(2, 1fr)" gap={4}>
-        {battleState.playerPokemon.moves.map((move, index) => (
+      <Grid templateColumns="repeat(2, 1fr)" gap={3}>
+        {pokemon.moves.map((move, index) => (
           <GridItem key={index}>
             <Button
+              className="pixel-button"
+              onClick={() => handleAttack(index, isPlayer ? 'player' : 'opponent')}
+              isDisabled={battleState.isGameOver || !isCurrentTurn}
               width="100%"
-              onClick={() => handleAttack(index)}
-              isDisabled={battleState.isGameOver || battleState.currentTurn !== 'player'}
-              colorScheme="blue"
-              size="md"
+              size="sm"
             >
               {move.name}
             </Button>
@@ -206,56 +162,59 @@ export const Battle: React.FC<BattleProps> = ({
   }
 
   return (
-    <VStack spacing={8} width="100%">
-      <Grid templateColumns="repeat(2, 1fr)" gap={8} width="100%">
-        <GridItem>
-          <Card bg={bgColor} borderWidth="1px" borderColor={borderColor}>
-            <CardBody>
-              <VStack spacing={4}>
-                <PokemonCard
-                  pokemon={battleState.playerPokemon}
-                  showStats
-                />
-                <Box width="100%">
-                  <Text mb={2} fontSize="sm" fontWeight="medium">HP</Text>
-                  <Progress
-                    value={(battleState.playerPokemon.stats.hp / playerMaxHp) * 100}
-                    colorScheme="green"
-                    size="sm"
-                    borderRadius="full"
+    <Box className="battle-field">
+      <VStack spacing={6} width="100%">
+        <Grid templateColumns="repeat(2, 1fr)" gap={6} width="100%">
+          <GridItem>
+            <Card className="pokemon-card">
+              <CardBody>
+                <VStack spacing={3}>
+                  <PokemonCard
+                    pokemon={battleState.playerPokemon}
+                    showStats
                   />
-                </Box>
-              </VStack>
-            </CardBody>
-          </Card>
-        </GridItem>
-        <GridItem>
-          <Card bg={bgColor} borderWidth="1px" borderColor={borderColor}>
-            <CardBody>
-              <VStack spacing={4}>
-                <PokemonCard
-                  pokemon={battleState.opponentPokemon}
-                  showStats
-                />
-                <Box width="100%">
-                  <Text mb={2} fontSize="sm" fontWeight="medium">HP</Text>
-                  <Progress
-                    value={(battleState.opponentPokemon.stats.hp / opponentMaxHp) * 100}
-                    colorScheme="red"
-                    size="sm"
-                    borderRadius="full"
+                  <Box width="100%">
+                    <Text mb={1} fontSize="xs" fontWeight="medium">HP</Text>
+                    <Box className="hp-bar">
+                      <Box 
+                        className="hp-bar-fill"
+                        width={`${(battleState.playerPokemon.stats.hp / playerMaxHp) * 100}%`}
+                      />
+                    </Box>
+                  </Box>
+                  {renderMoves(battleState.playerPokemon, true)}
+                </VStack>
+              </CardBody>
+            </Card>
+          </GridItem>
+          <GridItem>
+            <Card className="pokemon-card">
+              <CardBody>
+                <VStack spacing={3}>
+                  <PokemonCard
+                    pokemon={battleState.opponentPokemon}
+                    showStats
                   />
-                </Box>
-              </VStack>
-            </CardBody>
-          </Card>
-        </GridItem>
-      </Grid>
+                  <Box width="100%">
+                    <Text mb={1} fontSize="xs" fontWeight="medium">HP</Text>
+                    <Box className="hp-bar">
+                      <Box 
+                        className="hp-bar-fill"
+                        width={`${(battleState.opponentPokemon.stats.hp / opponentMaxHp) * 100}%`}
+                      />
+                    </Box>
+                  </Box>
+                  {renderMoves(battleState.opponentPokemon, false)}
+                </VStack>
+              </CardBody>
+            </Card>
+          </GridItem>
+        </Grid>
 
-      <Divider />
+        <Divider borderColor="var(--pokemon-dark)" borderWidth="2px" />
 
-      {renderBattleLog()}
-      {renderMoves()}
-    </VStack>
+        {renderBattleLog()}
+      </VStack>
+    </Box>
   );
 }; 
